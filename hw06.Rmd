@@ -1,0 +1,208 @@
+---
+title: "hw06 Data wrangling wrap up"
+output: github_document
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#### Load data and packages
+
+```{r}
+suppressPackageStartupMessages(library(gapminder))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(knitr))
+suppressPackageStartupMessages(library(MASS))
+suppressPackageStartupMessages(library(singer))
+suppressPackageStartupMessages(library(ggmap))
+suppressPackageStartupMessages(library(repurrrsive))
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(leaflet))
+
+```
+
+
+#### 2. Writing functions
+Write one (or more) functions that do something useful to pieces of the Gapminder or Singer data.
+
+For this task, I use the China's data from gapminder dataframe to explore it. So first we get the data for China.
+```{r}
+china <- "China" 
+(china_dat <- gapminder %>% 
+  filter(country == china))
+```
+
+Then we can use the linear model to fit the liefExp versus the year. 
+
+Firstly, we create a linear model which returns the coefficient of the intercept and the slope. 
+
+```{r}
+linearModel <- function (dat, offset = 1952) {
+  #fit a linear regression model
+  linMod <- lm(lifeExp ~ I(year - offset), data = dat)
+  returnDat <- c(linMod$coef)
+  return(setNames(data.frame(t(returnDat)), c("intercept", "slope")))
+}
+```
+
+We can directly apply this model the China data. 
+```{r}
+linearModel(china_dat)
+```
+
+```{r}
+p <- ggplot(china_dat, aes(x = year, y = lifeExp))
+p + geom_point() + geom_smooth(method = "lm", se = FALSE)
+```
+
+So we can see that the linear regression model doesn't works well for the China data.
+
+Since the lifeExp doesn't change lineary with the year, we consider creating a quadratic model which may better fit the data. The model is created below. 
+
+```{r}
+quadraticModel <- function (dat, offset = 1952) {
+  #fit a quadratic regression model
+  quadraticMod <- lm(lifeExp ~ I(year - offset), data = dat)
+  returnDat <- c(quadraticMod$coef)
+  return(setNames(data.frame(t(returnDat)), c("intercept", "slope")))
+}
+```
+
+Then, we can apply this model to the China data.
+```{r}
+quadraticModel(china_dat)
+```
+
+Actually, the quadratic model have a better result for this data. 
+```{r}
+p <- ggplot(china_dat, aes(x = year, y = lifeExp))
+p + geom_point() + geom_smooth(method = "lm", formula = y ~ x + I(x^2), se = FALSE)
+```
+
+Apart from the quadratic regression model, we may also wish to fit a robust regression model. Similarly, we can write another function for the robust regression case.
+```{r}
+robustModel <- function (dat, offset = 1952){
+  #fit a robust regression model
+  robMod<- rlm(lifeExp ~ I(year - offset), data = dat)
+  returnDat <- c(robMod$coef)
+  return(setNames(data.frame(t(returnDat)), c("intercept", "slope")))
+}
+```
+
+
+```{r}
+robustModel(china_dat)
+```
+
+These result are very similar to the linear model.
+
+```{r}
+p <- ggplot(china_dat, aes(x = year, y = lifeExp))
+p + geom_point() + geom_smooth(method = "rlm", se = FALSE)
+```
+
+
+#### 4. Work with the singer data
+##### 4.1 Use purrr to map latitude and longitude into human readable information on the band’s origin places. 
+
+In order to access the location, we need first register the Google API. 
+```{r}
+register_google("AIzaSyCofrdT-5MetLRbrW9Rt-l50gAeEr3eCNY")
+```
+
+Here is the `singer_locations` data frame. 
+```{r}
+str(singer_locations)
+```
+
+```{r}
+head(singer_locations) %>% 
+  knitr::kable()
+```
+
+Let's take a look at only the cities and their latitude and longitude. 
+```{r}
+cities_location <- singer_locations %>% 
+  dplyr::select(city, latitude, longitude)
+
+head(cities_location, 10) %>%    
+  knitr::kable()
+```
+
+As we can from the table, there are a lot of `NA` table cells. We can instaed remove the `NA`s from the dataframe using the following codes:
+
+```{r}
+cities_location_without_NA <- cities_location %>% 
+  filter(!is.na(city) & !is.na(latitude) & !is.na(longitude)) # remove NA
+  
+head(cities_location_without_NA, 10) %>% 
+  knitr::kable()  
+```
+
+For simplicity, we only consider the first 30 entries. 
+```{r}
+cities_location_without_NA_30 <- cities_location_without_NA %>% 
+  slice(1:30)
+
+ggmap_loc <- mapply( FUN = function(lon, lat) { 
+    revgeocode(c(lon, lat), output = "address") 
+  }, 
+  cities_location_without_NA_30$longitude, cities_location_without_NA_30$latitude
+)
+```
+
+Then, we can take a look at the head of this dataframe. 
+```{r}
+head(ggmap_loc, 30)
+```
+
+And we can compare these with the data extracted from ggmap.
+```{r}
+knitr::kable(cbind(ggmap_loc, cities_location_without_NA_30$city),
+             col.names = c("cities extracted from ggmap", "cities extracted from singer_location"),
+             align = "c")
+```
+
+
+##### 4.2 Try to check wether the place in city corresponds to the information you retrieved.
+
+For this part, we can use `grepl` function to check whether the city extracted from singer_location in the cities in ggmap.
+
+```{r}
+mapply(grepl, cities_location_without_NA_30$city, ggmap_loc, fixed = TRUE) %>% 
+  knitr::kable()  
+```
+
+We can see from the result that there are a lof of mismatch. This is due to the format of address. We can solve this issue as shown in the following code. 
+
+```{r}
+split_word <- function(list) { # helper function to split string 
+   r <- str_split(list, pattern = boundary("word"))
+  return(r)
+}
+
+ggmap_location <- split_word(ggmap_loc)
+cities_location <- split_word(cities_location_without_NA_30$city)
+
+mapply(intersect, cities_location, ggmap_location) %>% 
+  lapply(length) %>% 
+  map(function(len) len > 0)
+```
+
+The result still exsits some mismatch due to the orginal mismatch problem in the dataframe of ggamp and singer_location. 
+
+##### 4.3 If you still have time, you can go visual: give a look to the library leaflet and plot some information about the bands. 
+
+We can use the following code to generate a visual figure. 
+```{r}
+cities_location_without_NA_30 %>%  
+  leaflet()  %>%   
+  addTiles() %>%  
+  addCircles(lng = cities_location_without_NA_30$longitude,
+             lat = cities_location_without_NA_30$latitude,
+             popup = cities_location_without_NA_30$city
+            )
+```
+
